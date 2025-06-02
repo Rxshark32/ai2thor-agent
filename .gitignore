@@ -1,0 +1,20 @@
+# Bytecode
+__pycache__/
+*.pyc
+
+# Conda environment
+*.env
+.env/
+.venv/
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# MacOS
+.DS_Store
+

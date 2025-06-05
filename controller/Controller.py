@@ -1,11 +1,11 @@
 from ai2thor.controller import Controller
-from ai2thor.util.metrics import get_shortest_path_to_object_type
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 import time
 
 
+# Agent Initialization
 def init_Agent():
     controller = Controller(
         agentMode="arm",
@@ -19,9 +19,9 @@ def init_Agent():
         height=800,
         fieldOfView=60
     )
-    controller.reset("FloorPlan1")
     return controller
 
+# (Hard-coded) to env1 (Pathfinding Algorithm Needed)
 def navStove(controller):
     controller.step("RotateLeft")
     for i in range(10):
@@ -35,6 +35,7 @@ def navStove(controller):
     controller.step("MoveAhead")
     controller.step('Pass')
 
+# Conditional check for arm spacing and toggling
 def get_closest_toggleable_object(controller, radius=0.05):
     hand_pos = controller.last_event.metadata["arm"]["handSphereCenter"]
     
@@ -62,6 +63,7 @@ def get_closest_toggleable_object(controller, radius=0.05):
     else:
         return None
 
+# (Hard-coded) Sets enviroment into a dangerous state
 def turnOnStove(controller):
     event = controller.step(action="Pass")
     for obj in event.metadata["objects"]:
@@ -70,12 +72,13 @@ def turnOnStove(controller):
             controller.step(action="ToggleObjectOn", objectId=obj["objectId"])
             controller.step('Pass')
 
+# (Hard-coded) Conditional check for arm spacing and toggling (RL Model Needed)
 def turnOffStove(controller):
     event = controller.last_event
     print(event.metadata["arm"]["handSphereCenter"])
     controller.step(
         action="MoveArm",
-        position={'x': 0, 'y': 0, 'z': 0.5},
+        position={'x': 0, 'y': 0, 'z': 0},
         coordinateSpace="armBase",
         restrictMovement=False,
         speed=1,
@@ -106,6 +109,7 @@ def turnOffStove(controller):
         print("No toggleable object close enough to hand.")
     controller.step('Pass')
 
+# Shows map of the enviroment and labels of the objects
 def showMap(controller):
     positions = controller.step(action="GetReachablePositions")
     x_vals = [pos['x'] for pos in positions.metadata["actionReturn"]]
@@ -136,14 +140,14 @@ def showMap(controller):
 
 
 #TESTING AREA!! CAUTION EVERYTHING BREAKS (T⌓T)
-# controller = init_Agent()
-# navStove(controller)
-# turnOnStove(controller)
-# controller.step('Pass')
-# turnOffStove(controller)
-# controller.step('Pass')
-# controller.step('Pass')
+controller = init_Agent()
+navStove(controller)
+turnOnStove(controller)
+controller.step('Pass')
+turnOffStove(controller)
+controller.step('Pass')
+controller.step('Pass')
 
-# input("any key to stop")
-# controller.stop()
+input("any key to stop")
+controller.stop()
 

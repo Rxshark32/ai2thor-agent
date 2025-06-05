@@ -1,16 +1,17 @@
-from controller.Controller import init_Agent, navStove,turnOnStove, turnOffStove
+import gymnasium as gym
+import envs.stove_env   # This line just ensures registration runs
 
-def main():
-    controller = init_Agent()
-    navStove(controller)
-    turnOnStove(controller)
-    controller.step('Pass')
-    turnOffStove(controller)
-    controller.step('Pass')
-    controller.step('Pass')
+env = gym.make("stove-turnoff-v0")
+obs, _ = env.reset()
+done = False
+from gymnasium.utils.env_checker import check_env
+check_env(env)
 
-    input("any key to stop")
-    controller.stop()
+# env = gym.make("stove-turnoff-v0")
+# obs, _ = env.reset()
+# done = False
+# while not done:
+#     action = env.action_space.sample()
+#     obs, reward, done, _, _ = env.step(action)
+#     env.render()
 
-if __name__ == "__main__":
-    main()

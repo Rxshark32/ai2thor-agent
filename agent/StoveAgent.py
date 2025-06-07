@@ -125,12 +125,14 @@ class StoveAgent:
             plt.show()
 
     def move_arm(self, dx=0, dy=0, dz=0, speed=1.0):
-        hand_pos = self.controller.last_event.metadata["arm"]["handSphereCenter"]
+        # Get current hand position
         new_pos = {
-            'x': hand_pos['x'] + dx,
-            'y': hand_pos['y'] + dy,
-            'z': hand_pos['z'] + dz
+            'x': dx,  # interpret dx, dy, dz as absolute target position offsets now
+            'y': dy,
+            'z': dz
         }
+
+        # Perform the move arm step with fixedDeltaTime for smooth small movement
         event = self.controller.step(
             action="MoveArm",
             position=new_pos,
@@ -140,16 +142,20 @@ class StoveAgent:
             returnToStart=False,
             fixedDeltaTime=0.02
         )
+
+        # Pass step to process action
         self.controller.step("Pass")
+
+        # Return success status of the action
         return event.metadata["lastActionSuccess"]
-    
+
     def toggle_object(self):
         """
         Toggles the closest toggleable object within radius.
         """
         obj_id = self.get_closest_toggleable_object()
         if obj_id:
-            event = self.controller.step(action="ToggleObjectOnOff", objectId=obj_id)
+            event = self.controller.step(action="ToggleObjectOff", objectId=obj_id)
             self.controller.step("Pass")
             return event.metadata["lastActionSuccess"]
         else:

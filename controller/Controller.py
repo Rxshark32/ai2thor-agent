@@ -78,7 +78,7 @@ def turnOffStove(controller):
     print(event.metadata["arm"]["handSphereCenter"])
     controller.step(
         action="MoveArm",
-        position={'x': 0, 'y': 0, 'z': 0},
+        position={'x': 0, 'y': 0, 'z': 0.5},
         coordinateSpace="armBase",
         restrictMovement=False,
         speed=1,
@@ -140,14 +140,14 @@ def showMap(controller):
 
 
 #TESTING AREA!! CAUTION EVERYTHING BREAKS (T⌓T)
-controller = init_Agent()
-navStove(controller)
-turnOnStove(controller)
-controller.step('Pass')
-turnOffStove(controller)
-controller.step('Pass')
-controller.step('Pass')
+# controller = init_Agent()
+# navStove(controller)
+# turnOnStove(controller)
+# controller.step('Pass')
+# turnOffStove(controller)
+# controller.step('Pass')
+# controller.step('Pass')
 
-input("any key to stop")
-controller.stop()
+# input("any key to stop")
+# controller.stop()
 

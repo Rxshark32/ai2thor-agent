@@ -17,7 +17,6 @@ register(
     entry_point="envs.stove_env:StoveEnv",
 )
 
-
 #Creating custom class
 class StoveEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 4}
@@ -27,49 +26,66 @@ class StoveEnv(gym.Env):
 
         # Create the AI2-THOR controller/agent
         self.agent = StoveAgent()
-        
+
         # REAL TIME LIM!
-        self.max_duration = 20  # seconds
+        self.max_duration = 10  # seconds
         self.start_time = None
+
+        # arm base init
+        self.arm_base_y_pos = 0.6
 
         # Define a discrete action space
         self.delta = 0.05
-        self.action_space = spaces.MultiDiscrete([7, 7, 7, 7, 7])
+        self.action_space = spaces.Discrete(9)
 
         self.actions = {
-            0: (0.1, 0, 0.5),   # Move arm +x
-            1: (-0.1, 0, 0.5),  # Move arm -x
-            2: (0, 0.1, 0.5),   # Move arm +y
-            3: (0, -0.1, 0.5),  # Move arm -y
-            4: (0, 0, 0.6),     # Move arm +z
-            5: (0, 0, 0.4),     # Move arm -z
-            6: "toggle"
+            0: (0.1, 0, 0.0),    # Move arm +x
+            1: (-0.1, 0, 0.0),   # Move arm -x
+            2: (0, 0.1, 0.0),    # Move arm +y
+            3: (0, -0.1, 0.0),   # Move arm -y
+            4: (0, 0, 0.1),      # Move arm +z
+            5: (0, 0, -0.1),     # Move arm -z
+            6: 0.1,              # Move arm base +y
+            7: -0.1              # Move arm base -y
+            # 8 is handled separately
         }
-        
 
+        # Agent arm gets stuck too much
+        self.stuck_counter = 0
+        self.prev_hand_pos = None
 
-        # Define an observation space (example: stove status + hand position)
-        # You can define more detailed obs later
         self.observation_space = spaces.Box(
-            low=0,
-            high=255,
-            shape=(800, 800, 3),
-            dtype=np.uint8
+            low=np.array([-np.inf]*24, dtype=np.float32),
+            high=np.array([np.inf]*24, dtype=np.float32),
+            shape=(24,),
+            dtype=np.float32
         )
+
+        self.curr_hand_pos = self.agent.controller.last_event.metadata["arm"]["handSphereCenter"]
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Close the existing controller if it exists (otherwise windows pile up!)
-        if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'controller'):
-            self.agent.controller.stop()
+        if not self.agent:
+            self.agent = StoveAgent()
+        else:
+            self.agent.env_randomizer()
+            self.agent.man_teleport()
+            self.agent.turn_on_stove()
 
-        # Reinitialize the agent and env
-        self.agent = StoveAgent()
-        self.agent.navigate_to_stove()
-        self.agent.turn_on_stove()
+        self.curr_hand_pos = {"x": 0.0, "y": 0.0, "z": 0.5}
+        self.agent.move_arm(
+            dx=self.curr_hand_pos["x"],
+            dy=self.curr_hand_pos["y"],
+            dz=self.curr_hand_pos["z"]
+        )
+
+        # Initialize arm base y pos here to the one from teleport or your default
+        self.arm_base_y_pos = 0.6
+
+        self.stuck_counter = 0
+        self.prev_hand_pos = self.curr_hand_pos.copy()
         self.start_time = time.time()
-
 
         obs = self._get_obs()
         info = {}
@@ -84,7 +100,9 @@ class StoveEnv(gym.Env):
             3: "Move arm -y",
             4: "Move arm +z",
             5: "Move arm -z",
-            6: "Toggle stove knob"
+            6: "Move arm base +y",
+            7: "Move arm base -y",
+            8: "Toggle stove knob"
         }
 
         if np.isscalar(action):
@@ -96,9 +114,44 @@ class StoveEnv(gym.Env):
             print(f"Agent action: {a} -> {action_meanings.get(a, 'Unknown action')}")
             if a in range(6):
                 dx, dy, dz = self.actions[a]
-                self.agent.move_arm(dx, dy, dz)
-            elif a == 6:
+                self.curr_hand_pos['x'] += dx
+                self.curr_hand_pos['y'] += dy
+                self.curr_hand_pos['z'] += dz
+                self.agent.move_arm(
+                    dx=self.curr_hand_pos["x"],
+                    dy=self.curr_hand_pos["y"],
+                    dz=self.curr_hand_pos["z"]
+                )
+            elif a in [6, 7]:
+                dy = self.actions[a]
+                self.arm_base_y_pos += dy
+                self.arm_base_y_pos = np.clip(self.arm_base_y_pos, 0.0, 1.0)
+                print(f"Attempting to move arm base to Y = {self.arm_base_y_pos}")
+                success = self.agent.move_arm_base(self.arm_base_y_pos)
+                print(f"MoveArmBase success: {success}")
+            elif a == 8:
                 self.agent.toggle_object()
+            self.agent.controller.step('Pass')
+
+        # Check if hand is stuck (position not changing)
+        curr_pos = self.agent.controller.last_event.metadata["arm"]["handSphereCenter"]
+        prev_pos = self.prev_hand_pos
+
+        if all(abs(curr_pos[axis] - prev_pos[axis]) < 1e-4 for axis in ['x','y','z']):
+            self.stuck_counter += 1
+        else:
+            self.stuck_counter = 0
+
+        self.prev_hand_pos = curr_pos
+
+        if self.stuck_counter >= 20:
+            reward = -3.0
+            terminated = True
+            truncated = False
+            obs = self._get_obs()
+            info = {"stuck_termination": True}
+            print("Agent stuck for 20 steps. Terminating episode with penalty reward.")
+            return obs, reward, terminated, truncated, info
 
         obs = self._get_obs()
         reward, terminated = self._compute_reward()
@@ -110,46 +163,78 @@ class StoveEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
-        """Return visual frame as numpy array."""
-        frame = self.agent.controller.last_event.frame
-        return np.array(frame)
+        MAX_KNOBS = 6
+        obs = []
+        metadata = self.agent.controller.last_event.metadata['objects']
+
+        stoveknob_list = [obj for obj in metadata if 'StoveKnob' in obj['name']]
+
+        event = self.agent.controller.last_event
+        hand_pos = event.metadata["arm"]['handSphereCenter']
+        obs.extend([hand_pos['x'], hand_pos['y'], hand_pos['z']])
+
+        knob_pos = [obj['position'] for obj in stoveknob_list]
+
+        for i in range(MAX_KNOBS):
+            if i < len(knob_pos):
+                k = knob_pos[i]
+                obs.extend([
+                    abs(k['x'] - hand_pos['x']),
+                    abs(k['y'] - hand_pos['y']),
+                    abs(k['z'] - hand_pos['z'])
+                ])
+            else:
+                obs.extend([0.0, 0.0, 0.0])
+
+        tot_dist = [((abs(k['x']-hand_pos['x']))**2+(abs(k['y']-hand_pos['y']))**2+(abs(k['z']-hand_pos['z']))**2)**0.5 for k in knob_pos]
+        obs.append(min(tot_dist) if tot_dist else 0.0)
+
+        stove_tog = [obj['isToggled'] for obj in stoveknob_list]
+        amt = sum(not v for v in stove_tog)
+        obs.append(amt)
+
+        obs.append(self.arm_base_y_pos)  # include arm base position
+
+        return np.array(obs, dtype=np.float32)
 
     def _compute_reward(self):
         metadata = self.agent.controller.last_event.metadata
-        hand = metadata["arm"]["handSphereCenter"]
+        hand_pos = metadata["arm"]["handSphereCenter"]
+        knobs = [obj for obj in metadata["objects"] if obj["objectType"] == "StoveKnob" and obj["visible"]]
 
-        knobs = [obj for obj in metadata["objects"]
-                if obj["objectType"] == "StoveKnob" and obj["visible"]]
+        if not knobs:
+            return -0.2, False
 
-        if knobs:
-            distances = []
-            for k in knobs:
-                dx = k["position"]["x"] - hand["x"]
-                dy = k["position"]["y"] - hand["y"]
-                dz = k["position"]["z"] - hand["z"]
-                dist = (dx**2 + dy**2 + dz**2) ** 0.5
-                distances.append(dist)
-            closest_dist = min(distances)
-        else:
-            closest_dist = 1.0
-
-        norm_dist = min(closest_dist, 1.0)
-        reward = 1.0 - 2 * norm_dist
-
-        # Check stove knob toggle states
-        toggled_states = [
-            obj.get("isToggled", False)
-            for obj in metadata["objects"]
-            if obj["objectType"] == "StoveKnob" and obj["visible"]
+        distances = [
+            ((k["position"]["x"] - hand_pos["x"])**2 +
+            (k["position"]["y"] - hand_pos["y"])**2 +
+            (k["position"]["z"] - hand_pos["z"])**2) ** 0.5
+            for k in knobs
         ]
-        if any(not state for state in toggled_states):
-            return reward + 0.5, True
-        
-        reward = max(-1.0, min(reward, 1.0))
 
-        terminated = False  # just keep running until tha thing finally turns off the knob....
+        closest_dist = min(distances)
+        norm_dist = min(closest_dist, 1.0)
+        distance_reward = np.exp(-5 * norm_dist)
 
-        return reward, terminated
+        knobs_on = [obj.get("isToggled", False) for obj in knobs]
+        num_on = sum(knobs_on)
+        num_knobs = len(knobs)
+
+        toggle_reward = 1.0 - 2.0 * (num_on / num_knobs)
+        success = (num_on == 0)
+
+        reward = 0.4 * toggle_reward + 0.6 * distance_reward
+        reward -= 0.1
+
+        if success:
+            reward += 2.0
+
+        elapsed_time = time.time() - self.start_time
+        reward -= 0.001 * elapsed_time
+
+        reward = max(-2.0, min(2.0, reward))
+
+        return reward, success
 
     def render(self):
         if self.render_mode == "human":

@@ -78,7 +78,7 @@ def turnOffStove(controller):
     print(event.metadata["arm"]["handSphereCenter"])
     controller.step(
         action="MoveArm",
-        position={'x': 0, 'y': 0, 'z': 0.5},
+        position={'x': -0.55, 'y': 0, 'z': 0.5},
         coordinateSpace="armBase",
         restrictMovement=False,
         speed=1,
@@ -86,20 +86,10 @@ def turnOffStove(controller):
         fixedDeltaTime=0.02
     )
     controller.step('Pass')
+    time.sleep(2)
     event = controller.last_event
     print(event.metadata["arm"]["handSphereCenter"])
-    controller.step(
-        action="MoveArm",
-        position=dict(x=-0.1, y=0, z=0.5),
-        coordinateSpace="armBase",
-        restrictMovement=False,
-        speed=1.0,
-        returnToStart=False,
-        fixedDeltaTime=0.02
-    )
-    controller.step('Pass')
-    event = controller.last_event
-    print(event.metadata["arm"]["handSphereCenter"])
+
     obj_id = get_closest_toggleable_object(controller)
     if obj_id:
         event = controller.step(action="ToggleObjectOff", objectId=obj_id)
@@ -138,16 +128,50 @@ def showMap(controller):
     plt.gca().set_aspect('equal', adjustable='box')
     plt.show()
 
+#(WIP Teleport)
+def teleport_to_stove(controller):
+
+    positions = controller.step(action="GetReachablePositions")
+
+    objlist = []
+    target_obj = None
+    for obj in positions.metadata['objects']:
+        if "Stove" in obj['objectType']:
+            objlist.append(obj)
+            target_obj = obj
+            break
+
+    
+    controller.step("Pass")
+    if target_obj is not None:
+        controller.step(
+            action="Teleport",
+            position=target_obj['position']
+        )
+
+    controller.step("Pass")
+
 
 #TESTING AREA!! CAUTION EVERYTHING BREAKS (T⌓T)
-# controller = init_Agent()
+controller = init_Agent()
+teleport_to_stove(controller)
+input("PRESS ANY KEY TO STOP!")
+
+
+# def print_stove_objects(controller):
+#     event = controller.step(action="Pass")
+#     print("=== Stove-Related Objects ===")
+#     for obj in event.metadata['objects']:
+#         if "stove" in obj['objectType'].lower():
+#             print(f"{obj['objectType']} @ {obj['position']}")
+# print_stove_objects(controller)
+
+
 # navStove(controller)
+# get_closest_toggleable_object(controller, radius=0.05)
 # turnOnStove(controller)
-# controller.step('Pass')
 # turnOffStove(controller)
 # controller.step('Pass')
-# controller.step('Pass')
-
 # input("any key to stop")
 # controller.stop()
 

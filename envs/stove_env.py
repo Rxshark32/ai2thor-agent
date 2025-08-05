@@ -8,34 +8,22 @@ import sys
 import os
 import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from agent.StoveAgent import StoveAgent
+from agents.StoveAgent import StoveAgent
 import numpy as np
 
 # Registering module as gymenv
 register(
     id="stove-turnoff-v0",
     entry_point="envs.stove_env:StoveEnv",
+    max_episode_steps=100
 )
 
 #Creating custom class
 class StoveEnv(gym.Env):
-    metadata = {"render_modes": ["human"], "render_fps": 4}
-
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, arm_base_y_pos = 0.6):
         self.render_mode = render_mode
-
-        # Create the AI2-THOR controller/agent
         self.agent = StoveAgent()
-
-        # REAL TIME LIM!
-        self.max_duration = 10  # seconds
-        self.start_time = None
-
-        # arm base init
-        self.arm_base_y_pos = 0.6
-
-        # Define a discrete action space
-        self.delta = 0.05
+        self.arm_base_y_pos = arm_base_y_pos
         self.action_space = spaces.Discrete(9)
 
         self.actions = {
@@ -47,51 +35,143 @@ class StoveEnv(gym.Env):
             5: (0, 0, -0.1),     # Move arm -z
             6: 0.1,              # Move arm base +y
             7: -0.1              # Move arm base -y
-            # 8 is handled separately
         }
 
         # Agent arm gets stuck too much
         self.stuck_counter = 0
         self.prev_hand_pos = None
 
+        self.step_count = 0
+        self.max_steps = 150
+        # trackers
+        self.knob_tracker = {}
+
         self.observation_space = spaces.Box(
-            low=np.array([-np.inf]*24, dtype=np.float32),
-            high=np.array([np.inf]*24, dtype=np.float32),
-            shape=(24,),
+            low=np.array([-np.inf]*6, dtype=np.float32),
+            high=np.array([np.inf]*6, dtype=np.float32),
+            shape=(6,),
             dtype=np.float32
         )
 
         self.curr_hand_pos = self.agent.controller.last_event.metadata["arm"]["handSphereCenter"]
 
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
+    def _get_obs(self,success = True):
+        event = self.agent.controller.last_event.metadata
+        obs = []
+        hand_pos = event['arm']['handSphereCenter']
+        obs.append(hand_pos)
 
-        if not self.agent:
-            self.agent = StoveAgent()
+        # Needs to be both off and toggled
+        stoveknob_list = [obj['position'] for obj in event['objects'] 
+                        if 'StoveKnob' in obj['name']
+                        and obj['visible'] == True
+                        and obj['isToggled'] == True
+                        ]
+
+        hand_vec = np.array([hand_pos['x'], hand_pos['y'], hand_pos['z']])
+
+        def euclidean_distance(knob):
+            knob_vec = np.array([knob['x'], knob['y'], knob['z']])
+            return np.linalg.norm(hand_vec - knob_vec)
+
+        # closest_knob = min(stoveknob_list, key=euclidean_distance)
+        # min_dist = euclidean_distance(closest_knob)
+
+        # print('Hand position', hand_pos)
+        # print("Min distance:", min_dist)
+        # print("Closest knob position:", closest_knob)
+        # print("Untoggled knobs:", len(stoveknob_list))
+
+        # OBSERVATAION SPACE RN:
+        # closest_knob_dx, closest_knob_dy, closest_knob_dz,
+        # min_euclid_dist, amount_of_untoggled_knobs
+        # last_tog_success
+
+        if stoveknob_list:
+            closest_knob = min(stoveknob_list, key=euclidean_distance)
+            min_dist = euclidean_distance(closest_knob)
+            knob_dx, knob_dy, knob_dz = closest_knob['x'] - hand_pos['x'], closest_knob['y'] - hand_pos['y'], closest_knob['z'] - hand_pos['z']
+            knob_count = len(stoveknob_list)
         else:
-            self.agent.env_randomizer()
-            self.agent.man_teleport()
-            self.agent.turn_on_stove()
+            knob_dx, knob_dy, knob_dz = 0.0, 0.0, 0.0
+            min_dist = 10.0
+            knob_count = 0
 
-        self.curr_hand_pos = {"x": 0.0, "y": 0.0, "z": 0.5}
-        self.agent.move_arm(
-            dx=self.curr_hand_pos["x"],
-            dy=self.curr_hand_pos["y"],
-            dz=self.curr_hand_pos["z"]
-        )
+        obs = np.array([
+            float(knob_dx), float(knob_dy), float(knob_dz),
+            float(min_dist),
+            float(knob_count),
+            float(success)
+        ], dtype=np.float32)
 
-        # Initialize arm base y pos here to the one from teleport or your default
-        self.arm_base_y_pos = 0.6
+        return obs
 
-        self.stuck_counter = 0
-        self.prev_hand_pos = self.curr_hand_pos.copy()
-        self.start_time = time.time()
+    def _get_info(self):
+        # Debugging Stuff
+        return {"Hello": 67}
 
-        obs = self._get_obs()
-        info = {}
-        return obs, info
+    def _get_reward(self):
+        base_penalty = -0.02
+        reward = base_penalty
+        terminated = False
+
+        metadata_objects = self.agent.controller.last_event.metadata["objects"]
+        hand_pos = self.agent.controller.last_event.metadata["arm"]["handSphereCenter"]
+
+        all_knobs_off = True  # start assuming all are off
+        min_dist_to_any_knob = float('inf')
+
+        for obj in metadata_objects:
+            if "stove" in obj["objectId"].lower() and "knob" in obj["objectId"].lower():
+                obj_id = obj["objectId"]
+
+                # Initialize tracking if not done yet
+                if obj_id not in self.knob_tracker:
+                    self.knob_tracker[obj_id] = {"touched": False, "toggled": False}
+
+                # If any knob is still toggled ON, mark all_knobs_off = False
+                if obj.get("isToggled", False):
+                    all_knobs_off = False
+
+                dist = sum(
+                    (hand_pos[axis] - obj["position"][axis]) ** 2 for axis in ["x", "y", "z"]
+                ) ** 0.5
+                min_dist_to_any_knob = min(min_dist_to_any_knob, dist)
+
+                if dist < 0.08 and not self.knob_tracker[obj_id]["touched"]:
+                    reward += 0.5
+                    self.knob_tracker[obj_id]["touched"] = True
+                    print(f"🟦TOUCHED STOVE ({hand_pos['x']:.3f}, {hand_pos['y']:.3f}, {hand_pos['z']:.3f})")
+
+
+                if not obj.get("isToggled", True) and not self.knob_tracker[obj_id]["toggled"]:
+                    reward += 5.0
+                    self.knob_tracker[obj_id]["toggled"] = True
+                    print("🟥TOGGLE")
+
+        # Add final reward and terminate episode if all knobs off
+        if all_knobs_off and not getattr(self, "episode_completed", False):
+            reward += 5.0
+            terminated = True
+            self.episode_completed = True
+            print("🟦🟦🟦🟦🟦🟦🟦🟦🟦ALL STOVES OFF🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥")
+
+        # Your existing penalty adjustment logic (optional)
+        if min_dist_to_any_knob < 0.10:
+            reward = max(reward, +0.01)
+        elif min_dist_to_any_knob < 0.20:
+            reward = max(reward, -0.01)
+        else:
+            reward = max(reward, -0.02)
+
+        return reward, terminated
 
     def step(self, action):
+
+        # Placeholders will implement later!!!
+        terminated = False
+        truncated = False
+        info = self._get_info()
 
         action_meanings = {
             0: "Move arm +x",
@@ -105,33 +185,40 @@ class StoveEnv(gym.Env):
             8: "Toggle stove knob"
         }
 
-        if np.isscalar(action):
+        if isinstance(action, (int, np.integer)):
             actions = [int(action)]
+        elif isinstance(action, np.ndarray) and action.ndim == 0:
+            actions = [int(action.item())]
         else:
-            actions = action
+            actions = list(action)
 
         for a in actions:
             print(f"Agent action: {a} -> {action_meanings.get(a, 'Unknown action')}")
             if a in range(6):
                 dx, dy, dz = self.actions[a]
-                self.curr_hand_pos['x'] += dx
-                self.curr_hand_pos['y'] += dy
-                self.curr_hand_pos['z'] += dz
-                self.agent.move_arm(
-                    dx=self.curr_hand_pos["x"],
-                    dy=self.curr_hand_pos["y"],
-                    dz=self.curr_hand_pos["z"]
+                new_pos = {
+                    'x': self.curr_hand_pos['x'] + dx,
+                    'y': self.curr_hand_pos['y'] + dy,
+                    'z': self.curr_hand_pos['z'] + dz,
+                }
+                success = self.agent.move_arm(
+                    dx=new_pos['x'],
+                    dy=new_pos['y'],
+                    dz=new_pos['z']
                 )
+                if success:
+                    self.curr_hand_pos = new_pos
             elif a in [6, 7]:
                 dy = self.actions[a]
                 self.arm_base_y_pos += dy
-                self.arm_base_y_pos = np.clip(self.arm_base_y_pos, 0.0, 1.0)
+                self.arm_base_y_pos = max((min(self.arm_base_y_pos, 1.0)), 0.0)
                 print(f"Attempting to move arm base to Y = {self.arm_base_y_pos}")
                 success = self.agent.move_arm_base(self.arm_base_y_pos)
+                if (success == False):
+                    self.arm_base_y_pos -= dy
                 print(f"MoveArmBase success: {success}")
             elif a == 8:
-                self.agent.toggle_object()
-            self.agent.controller.step('Pass')
+                success = self.agent.toggle_object()
 
         # Check if hand is stuck (position not changing)
         curr_pos = self.agent.controller.last_event.metadata["arm"]["handSphereCenter"]
@@ -147,94 +234,58 @@ class StoveEnv(gym.Env):
         if self.stuck_counter >= 20:
             reward = -3.0
             terminated = True
-            truncated = False
             obs = self._get_obs()
             info = {"stuck_termination": True}
             print("Agent stuck for 20 steps. Terminating episode with penalty reward.")
             return obs, reward, terminated, truncated, info
 
-        obs = self._get_obs()
-        reward, terminated = self._compute_reward()
-        elapsed_time = time.time() - self.start_time
-        truncated = elapsed_time >= self.max_duration
+        obs = self._get_obs(success)
+        reward, terminated = self._get_reward()
+
+        # Last Action Success Penalty!
+        if success == False:
+            print("❌ FAILED LAST ACTION! -0.1 ❌")
+            reward += -0.1
+
+        self.step_count += 1
+        if self.step_count >= self.max_steps:
+            truncated = True
+            print("STEP LIMIT REACHED. 150 Truncating episode.")
 
         print(f"Reward obtained: {reward}")
-        info = {"elapsed_time": elapsed_time}
         return obs, reward, terminated, truncated, info
 
-    def _get_obs(self):
-        MAX_KNOBS = 6
-        obs = []
-        metadata = self.agent.controller.last_event.metadata['objects']
+    def reset(self, seed=None, options=None):
+        super_return = super().reset(seed=seed)  # Gymnasium expects you call this
 
-        stoveknob_list = [obj for obj in metadata if 'StoveKnob' in obj['name']]
+        if not self.agent:
+            self.agent = StoveAgent()
+        else:
+            self.agent.env_randomizer(seed=seed)
+            self.agent.man_teleport()
+            self.agent.turn_on_stove()
 
-        event = self.agent.controller.last_event
-        hand_pos = event.metadata["arm"]['handSphereCenter']
-        obs.extend([hand_pos['x'], hand_pos['y'], hand_pos['z']])
+        self.episode_completed = False
+        self.curr_hand_pos = {"x": 0.0, "y": 0.0, "z": 0.5}
+        self.arm_base_y_pos = 0.6
+        self.stuck_counter = 0
+        self.prev_hand_pos = {
+            "x": float(self.curr_hand_pos["x"]),
+            "y": float(self.curr_hand_pos["y"]),
+            "z": float(self.curr_hand_pos["z"])
+        }
+        self.step_count = 0
+        self.knob_tracker = {}
 
-        knob_pos = [obj['position'] for obj in stoveknob_list]
+        # Gymnasium reset returns obs, info
+        obs = self._get_obs()
+        info = {}
 
-        for i in range(MAX_KNOBS):
-            if i < len(knob_pos):
-                k = knob_pos[i]
-                obs.extend([
-                    abs(k['x'] - hand_pos['x']),
-                    abs(k['y'] - hand_pos['y']),
-                    abs(k['z'] - hand_pos['z'])
-                ])
-            else:
-                obs.extend([0.0, 0.0, 0.0])
+        # If super().reset() returns obs, info, unpack and replace if needed
+        if isinstance(super_return, tuple) and len(super_return) == 2:
+            obs, info = super_return
 
-        tot_dist = [((abs(k['x']-hand_pos['x']))**2+(abs(k['y']-hand_pos['y']))**2+(abs(k['z']-hand_pos['z']))**2)**0.5 for k in knob_pos]
-        obs.append(min(tot_dist) if tot_dist else 0.0)
-
-        stove_tog = [obj['isToggled'] for obj in stoveknob_list]
-        amt = sum(not v for v in stove_tog)
-        obs.append(amt)
-
-        obs.append(self.arm_base_y_pos)  # include arm base position
-
-        return np.array(obs, dtype=np.float32)
-
-    def _compute_reward(self):
-        metadata = self.agent.controller.last_event.metadata
-        hand_pos = metadata["arm"]["handSphereCenter"]
-        knobs = [obj for obj in metadata["objects"] if obj["objectType"] == "StoveKnob" and obj["visible"]]
-
-        if not knobs:
-            return -0.2, False
-
-        distances = [
-            ((k["position"]["x"] - hand_pos["x"])**2 +
-            (k["position"]["y"] - hand_pos["y"])**2 +
-            (k["position"]["z"] - hand_pos["z"])**2) ** 0.5
-            for k in knobs
-        ]
-
-        closest_dist = min(distances)
-        norm_dist = min(closest_dist, 1.0)
-        distance_reward = np.exp(-5 * norm_dist)
-
-        knobs_on = [obj.get("isToggled", False) for obj in knobs]
-        num_on = sum(knobs_on)
-        num_knobs = len(knobs)
-
-        toggle_reward = 1.0 - 2.0 * (num_on / num_knobs)
-        success = (num_on == 0)
-
-        reward = 0.4 * toggle_reward + 0.6 * distance_reward
-        reward -= 0.1
-
-        if success:
-            reward += 2.0
-
-        elapsed_time = time.time() - self.start_time
-        reward -= 0.001 * elapsed_time
-
-        reward = max(-2.0, min(2.0, reward))
-
-        return reward, success
+        return obs, info
 
     def render(self):
         if self.render_mode == "human":

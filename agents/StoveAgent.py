@@ -7,8 +7,6 @@ from collections import deque
 import random
 
 
-
-
 # StoveAgent class for OOP
 class StoveAgent:
     def __init__(self, scene="FloorPlan1", width=800, height=800):
@@ -40,7 +38,7 @@ class StoveAgent:
         self.controller.step("MoveAhead")
         self.controller.step("Pass")
 
-    def get_closest_toggleable_object(self, radius=0.07):
+    def get_closest_toggleable_object(self, radius=0.08):
         hand_pos = self.controller.last_event.metadata["arm"]["handSphereCenter"]
         
         def dist(obj):
@@ -97,22 +95,24 @@ class StoveAgent:
         plt.legend()
         plt.show()
 
-    def move_arm(self, dx=0, dy=0, dz=0, speed=1.0):
+    def move_arm(self, dx = 0, dy = 0, dz = 0):
+        # Absolute Target Position
         new_pos = {
             'x': dx,
             'y': dy,
             'z': dz
         }
-
+        
         event = self.controller.step(
-            action="MoveArm",
-            position=new_pos,
-            coordinateSpace="armBase",
-            restrictMovement=False,
-            speed=speed,
-            returnToStart=False,
-            fixedDeltaTime=0.02
+            action = "MoveArm",
+            position = new_pos,
+            coordinateSpace = "armBase",
+            restrictMovement = True,
+            speed = 1,
+            returnToStart = False,
+            fixedDeltaTime = 0.02
         )
+
         self.controller.step("Pass")
 
         return event.metadata["lastActionSuccess"]
@@ -123,16 +123,16 @@ class StoveAgent:
             action="MoveArmBase",
             y=y,
             speed=1,
-            returnToStart=True,
+            returnToStart=False,
             fixedDeltaTime=0.02
         )
         self.controller.step("Pass")
         return event.metadata.get("lastActionSuccess", False)
 
     def toggle_object(self):
-        """
-        Toggles the closest toggleable object within radius.
-        """
+        
+        # Toggles the closest toggleable object within hand_radius
+
         obj_id = self.get_closest_toggleable_object()
         if obj_id:
             event = self.controller.step(action="ToggleObjectOff", objectId=obj_id)
@@ -226,11 +226,14 @@ class StoveAgent:
         self.controller.step("LookDown")
         self.controller.step("Pass")
 
-    def env_randomizer(self):
-        scene_num = random.randint(1, 5)
-        scene_name = f"FloorPlan{scene_num}"
-        print(f"FloorPlan{scene_num}")
-        self.controller.reset(scene_name)
+    def env_randomizer(self, seed=None):
+        if seed is not None:
+            random.seed(seed)
+        # Only pick from FloorPlan7, FloorPlan10, FloorPlan11
+        possible_scenes = ["FloorPlan7", "FloorPlan10", "FloorPlan11"]
+        scene_name = random.choice(possible_scenes)
+        print(scene_name)
+        self.controller.reset(scene=scene_name)
     
     def man_teleport(self):
         perfect_agent_poses = {
@@ -259,6 +262,22 @@ class StoveAgent:
                 "rotation": {'x': 0, 'y': 180, 'z': 0},
                 "arm_base_y": 0.4
             },
+            # Testing Floorplans
+            "FloorPlan7_physics": {
+                "position": {'x': 1.25, 'y': 0.901, 'z': -0.5},
+                "rotation": {'x': 0, 'y': 180, 'z': 0},
+                "arm_base_y": 0.3
+            },
+            "FloorPlan10_physics": {
+                "position": {'x': 0.0, 'y': 0.901, 'z': -1.25},
+                "rotation": {'x': 0, 'y': 0, 'z': 0},
+                "arm_base_y": 0.4
+            },
+            "FloorPlan11_physics": {
+                "position": {'x': 1.25, 'y': 0.901, 'z': -0.75},
+                "rotation": {'x': 0, 'y': 180, 'z': 0},
+                "arm_base_y": 0.4
+            }
         }
 
         floorplan_name = self.controller.last_event.metadata['sceneName']

@@ -1,12 +1,7 @@
 import gymnasium as gym
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-# Register your env here (or import from a module that does)
 from envs.stove_env import StoveEnv
-gym.register(
-    id="stove-turnoff-v0",
-    entry_point="envs.stove_env:StoveEnv",
-)
 
 def make_env(rank):
     def _init():
@@ -39,13 +34,14 @@ if __name__ == "__main__":
 
     def make_env(seed):
         def _init():
-            env = gym.make("stove-turnoff-v0")
+            env = gym.make("stove-turnoff-v0", render_mode="human")
             env = Monitor(env)
             env.reset(seed=seed)
             return env
         return _init
 
     num_envs = 4
+
     envs = SubprocVecEnv([make_env(i) for i in range(num_envs)])
 
     # model = PPO(
@@ -57,7 +53,7 @@ if __name__ == "__main__":
     #     batch_size=512
     # )
 
-    model = PPO.load("models/ppo_stove_turnoff", env=envs)
+    model = PPO.load("models/ppo_stove_turnoff_final_v4", env=envs)
 
     callback = TensorboardFlushAndCheckpointCallback(
         flush_freq=2048,
@@ -65,5 +61,5 @@ if __name__ == "__main__":
         verbose=1
     )
 
-    model.learn(total_timesteps=1_000_000, callback=callback)
-    model.save("models/ppo_stove_turnoff_final")
+    model.learn(total_timesteps=200_000, callback=callback)
+    model.save("models/ppo_stove_turnoff_final_v5")

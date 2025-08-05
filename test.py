@@ -1,20 +1,26 @@
 import gymnasium as gym
-import envs.stove_env   # This line just ensures registration runs
+import envs.stove_env
+from gymnasium.utils.env_checker import check_env
+
+# env = gym.make("stove-turnoff-v0")
+
+# try:
+#     check_env(env)
+#     print("Environment passes all checks!")
+# except Exception as e:
+#     print(f"Environment has issues: {e}")
+
+##### Observation Tester #####
 
 env = gym.make("stove-turnoff-v0")
-obs, _ = env.reset()
-print("observation: ", obs)
-done = False
+obs, info = env.reset()
+print("First observation:", obs)
 
-# Enviroment Checker!
-obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
-input("Press any key to close")
-env.close()
+action = env.action_space.sample()
+print("Taking action:", action)
 
-# while not done:
+obs, reward, terminated, truncated, info = env.step(action)
 
-
-#     action = env.action_space.sample()
-#     obs, reward, done, _, _ = env.step(action)
-#     env.render()
-
+print("Second observation:", obs)
+print("Reward:", reward)
+print("Terminated:", terminated, "Truncated:", truncated)
